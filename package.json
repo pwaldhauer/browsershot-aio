@@ -1,15 +1,18 @@
 {
-  "name": "browsershot-docker-aio",
-  "version": "1.0.0",
-  "description": "",
+  "name": "browsershot-aio",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Express server that runs the Browsershot puppeteer script inside a Chrome container",
   "main": "app.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
   },
-  "author": "",
-  "license": "ISC",
+  "scripts": {
+    "start": "node app.js"
+  },
   "dependencies": {
-    "express": "^4.18.2",
-    "puppeteer": "^20.5.0"
+    "express": "^5.2.1",
+    "puppeteer": "^25.11.0"
   }
 }

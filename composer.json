@@ -1,6 +1,6 @@
 {
-    "name": "pwaldhauer/browsershot-aio",
-    "description": "All in one Docker Container to run Browsershot",
+    "name": "pwaio/browsershot-aio",
+    "description": "All in one Docker container to run Browsershot",
     "keywords": [
         "laravel",
         "browsershot",
@@ -15,8 +15,10 @@
         }
     ],
     "require": {
-        "php": "^8.0",
-        "spatie/browsershot": "^3.52"
+        "php": "^8.2",
+        "ext-curl": "*",
+        "ext-json": "*",
+        "spatie/browsershot": "^5.4"
     },
     "autoload": {
         "psr-4": {
@@ -25,8 +27,6 @@
     },
     "config": {
         "sort-packages": true
-    },
-    "extra": {
     },
     "minimum-stability": "dev",
     "prefer-stable": true

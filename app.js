@@ -1,387 +1,250 @@
-const fs = require('fs');
-const URL = require('url').URL;
-const URLParse = require('url').parse;
-
-
-const express = require('express')
-const app = express()
-const port = 3000
-
-app.use(express.json());
-
-app.post('/', (req, res) => {
-  console.log(req.body);
-
-
-  browsershot(req.body, (r) => {
-    res.send(r)
-  })
-  
-})
-
-app.listen(port, () => {
-  console.log(`Listening on port ${port}`)
-})
-
-
-// The whole puppeteer control script is taken from
-// https://github.com/spatie/browsershot/blob/main/bin/browser.js
-function browsershot(request, callback) {
-  
-  const requestsList = [];
-
-  const consoleMessages = [];
-
-  const failedRequests = [];
-
-  const getOutput = async (page, request) => {
-      let output;
-
-      if (request.action == 'requestsList') {
-          output = JSON.stringify(requestsList);
-
-          return output;
-      }
-
-      if (request.action == 'consoleMessages') {
-          output = JSON.stringify(consoleMessages);
-
-          return output;
-      }
-
-      if (request.action == 'failedRequests') {
-          output = JSON.stringify(failedRequests);
-
-          return output;
-      }
-
-      if (request.action == 'evaluate') {
-          output = await page.evaluate(request.options.pageFunction);
-
-          return output;
-      }
-
-      output = await page[request.action](request.options);
-
-      return output.toString('base64');
-  };
-
-  const callChrome = async pup => {
-      let browser;
-      let page;
-      let output;
-      let remoteInstance;
-      const puppet = (pup || require('puppeteer'));
-
-      try {
-          
-          if (!browser) {
-              browser = await puppet.launch({
-                  ignoreHTTPSErrors: request.options.ignoreHttpsErrors,
-                  executablePath: request.options.executablePath,
-                  args: request.options.args || [],
-                  pipe: request.options.pipe || false,
-                  env: {
-                      ...(request.options.env || {}),
-                      ...process.env
-                  },
-              });
-          }
-
-          page = await browser.newPage();
-
-          if (request.options && request.options.disableJavascript) {
-              await page.setJavaScriptEnabled(false);
-          }
-
-          await page.setRequestInterception(true);
-
-          const contentUrl = request.options.contentUrl;
-          const parsedContentUrl = contentUrl ? contentUrl.replace(/\/$/, "") : undefined;
-          let pageContent;
-
-
-          if (contentUrl) {
-              pageContent = fs.readFileSync(request.url.replace('file://', ''));
-              request.url = contentUrl;
-          }
-
-          page.on('console',  message => consoleMessages.push({
-              type: message.type(),
-              message: message.text(),
-              location: message.location()
-          }));
-
-          page.on('response', function (response) {
-              if (response.status() >= 200 && response.status() <= 399) {
-                  return;
-              }
-
-              failedRequests.push({
-                  status: response.status(),
-                  url: response.url(),
-              });
-          })
-
-          page.on('request', interceptedRequest => {
-              var headers = interceptedRequest.headers();
-
-              requestsList.push({
-                  url: interceptedRequest.url(),
-              });
-
-              if (request.options && request.options.disableImages) {
-                  if (interceptedRequest.resourceType() === 'image') {
-                      interceptedRequest.abort();
-                      return;
-                  }
-              }
-
-              if (request.options && request.options.blockDomains) {
-                  const hostname = URLParse(interceptedRequest.url()).hostname;
-                  if (request.options.blockDomains.includes(hostname)) {
-                      interceptedRequest.abort();
-                      return;
-                  }
-              }
-
-              if (request.options && request.options.blockUrls) {
-                  for (const element of request.options.blockUrls) {
-                      if (interceptedRequest.url().indexOf(element) >= 0) {
-                          interceptedRequest.abort();
-                          return;
-                      }
-                  }
-              }
-
-              if (request.options && request.options.extraNavigationHTTPHeaders) {
-                  // Do nothing in case of non-navigation requests.
-                  if (interceptedRequest.isNavigationRequest()) {
-                      headers = Object.assign({}, headers, request.options.extraNavigationHTTPHeaders);
-                  }
-              }
-
-              if (pageContent) {
-                  const interceptedUrl = interceptedRequest.url().replace(/\/$/, "");
-
-                  // if content url matches the intercepted request url, will return the content fetched from the local file system
-                  if (interceptedUrl === parsedContentUrl) {
-                      interceptedRequest.respond({
-                          headers,
-                          body: pageContent,
-                      });
-                      return;
-                  }
-              }
-
-              if (request.postParams) {
-                  const postParamsArray = request.postParams;
-                  const queryString = Object.keys(postParamsArray)
-                      .map(key => `${key}=${postParamsArray[key]}`)
-                      .join('&');
-                  interceptedRequest.continue({
-                      method: "POST",
-                      postData: queryString,
-                      headers: {
-                          ...interceptedRequest.headers(),
-                          "Content-Type": "application/x-www-form-urlencoded"
-                      }
-                  });
-                  return;
-              }
-
-              interceptedRequest.continue({ headers });
-          });
-
-          if (request.options && request.options.dismissDialogs) {
-              page.on('dialog', async dialog => {
-                  await dialog.dismiss();
-              });
-          }
-
-          if (request.options && request.options.userAgent) {
-              await page.setUserAgent(request.options.userAgent);
-          }
-
-          if (request.options && request.options.device) {
-              const devices = puppet.devices;
-              const device = devices[request.options.device];
-              await page.emulate(device);
-          }
-
-          if (request.options && request.options.emulateMedia) {
-              await page.emulateMediaType(request.options.emulateMedia);
-          }
-
-          if (request.options && request.options.viewport) {
-              await page.setViewport(request.options.viewport);
-          }
-
-          if (request.options && request.options.extraHTTPHeaders) {
-              await page.setExtraHTTPHeaders(request.options.extraHTTPHeaders);
-          }
-
-          if (request.options && request.options.authentication) {
-              await page.authenticate(request.options.authentication);
-          }
-
-          if (request.options && request.options.cookies) {
-              await page.setCookie(...request.options.cookies);
-          }
-
-          if (request.options && request.options.timeout) {
-              await page.setDefaultNavigationTimeout(request.options.timeout);
-          }
-
-          const requestOptions = {};
-
-          if (request.options && request.options.networkIdleTimeout) {
-              requestOptions.waitUntil = 'networkidle';
-              requestOptions.networkIdleTimeout = request.options.networkIdleTimeout;
-          } else if (request.options && request.options.waitUntil) {
-              requestOptions.waitUntil = request.options.waitUntil;
-          }
-
-          const response = await page.goto(request.url, requestOptions);
-
-          if (request.options.preventUnsuccessfulResponse) {
-              const status = response.status()
-
-              if (status >= 400 && status < 600) {
-                  throw {type: "UnsuccessfulResponse", status};
-              }
-          }
-
-          if (request.options && request.options.disableImages) {
-              await page.evaluate(() => {
-                  let images = document.getElementsByTagName('img');
-                  while (images.length > 0) {
-                      images[0].parentNode.removeChild(images[0]);
-                  }
-              });
-          }
-
-          if (request.options && request.options.types) {
-              for (let i = 0, len = request.options.types.length; i < len; i++) {
-                  let typeOptions = request.options.types[i];
-                  await page.type(typeOptions.selector, typeOptions.text, {
-                      'delay': typeOptions.delay,
-                  });
-              }
-          }
-
-          if (request.options && request.options.selects) {
-              for (let i = 0, len = request.options.selects.length; i < len; i++) {
-                  let selectOptions = request.options.selects[i];
-                  await page.select(selectOptions.selector, selectOptions.value);
-              }
-          }
-
-          if (request.options && request.options.clicks) {
-              for (let i = 0, len = request.options.clicks.length; i < len; i++) {
-                  let clickOptions = request.options.clicks[i];
-                  await page.click(clickOptions.selector, {
-                      'button': clickOptions.button,
-                      'clickCount': clickOptions.clickCount,
-                      'delay': clickOptions.delay,
-                  });
-              }
-          }
-
-          if (request.options && request.options.addStyleTag) {
-              await page.addStyleTag(JSON.parse(request.options.addStyleTag));
-          }
-
-          if (request.options && request.options.addScriptTag) {
-              await page.addScriptTag(JSON.parse(request.options.addScriptTag));
-          }
-
-          if (request.options.delay) {
-              await page.waitForTimeout(request.options.delay);
-          }
-
-          if (request.options.initialPageNumber) {
-              await page.evaluate((initialPageNumber) => {
-                  window.pageStart = initialPageNumber;
-
-                  const style = document.createElement('style');
-                  style.type = 'text/css';
-                  style.innerHTML = '.empty-page { page-break-after: always; visibility: hidden; }';
-                  document.getElementsByTagName('head')[0].appendChild(style);
-
-                  const emptyPages = Array.from({length: window.pageStart}).map(() => {
-                      const emptyPage = document.createElement('div');
-                      emptyPage.className = "empty-page";
-                      emptyPage.textContent = "empty";
-                      return emptyPage;
-                  });
-                  document.body.prepend(...emptyPages);
-              }, request.options.initialPageNumber);
-          }
-
-          if (request.options.selector) {
-              var element;
-              const index = request.options.selectorIndex || 0;
-              if(index){
-                  element = await page.$$(request.options.selector);
-                  if(!element.length || typeof element[index] === 'undefined'){
-                      element = null;
-                  }else{
-                      element = element[index];
-                  }
-              }else{
-                  element = await page.$(request.options.selector);
-              }
-              if (element === null) {
-                  throw {type: 'ElementNotFound'};
-              }
-
-              request.options.clip = await element.boundingBox();
-          }
-
-          if (request.options.function) {
-              let functionOptions = {
-                  polling: request.options.functionPolling,
-                  timeout: request.options.functionTimeout || request.options.timeout
-              };
-              await page.waitForFunction(request.options.function, functionOptions);
-          }
-
-          output = await getOutput(page, request);
-
-
-          if (remoteInstance && page) {
-              await page.close();
-          }
-
-          await remoteInstance ? browser.disconnect() : browser.close();
-
-          callback(output);
-      } catch (exception) {
-          if (browser) {
-
-              if (remoteInstance && page) {
-                  await page.close();
-              }
-
-              await remoteInstance ? browser.disconnect() : browser.close();
-          }
-
-          if (exception.type === 'UnsuccessfulResponse') {
-              console.error(exception.status)
-
-              process.exit(3);
-          }
-
-          console.error(exception);
-
-          if (exception.type === 'ElementNotFound') {
-              process.exit(2);
-          }
-
-          process.exit(1);
-      }
-  };
-
-  callChrome();
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFile, spawn } = require('node:child_process');
+
+const express = require('express');
+
+const port = Number(process.env.PORT || 3000);
+const authToken = process.env.BROWSERSHOT_AIO_TOKEN || '';
+const bodyLimit = process.env.BROWSERSHOT_AIO_BODY_LIMIT || '32mb';
+const timeout = Number(process.env.BROWSERSHOT_AIO_TIMEOUT || 120) * 1000;
+
+// Shipped with the Browsershot composer package and copied into the image at
+// build time, so the container always speaks the exact protocol the PHP side
+// generates. See the BROWSERSHOT_VERSION build argument in the Dockerfile.
+const browserScript = process.env.BROWSERSHOT_SCRIPT || path.join(__dirname, 'browser.cjs');
+
+const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || '';
+// Chromium's sandbox does not work in this image, so --no-sandbox is applied
+// here rather than left in CHROME_ARGS: overriding that variable to add a flag
+// is normal, and doing so must not silently re-enable a sandbox that breaks
+// every page load. Set CHROME_SANDBOX=1 to opt out.
+const configuredArgs = (process.env.CHROME_ARGS || '').split(' ').filter(Boolean);
+const defaultArgs = process.env.CHROME_SANDBOX === '1' || configuredArgs.includes('--no-sandbox')
+    ? configuredArgs
+    : ['--no-sandbox', ...configuredArgs];
+
+// Beyond this the command no longer fits comfortably in argv, so hand it to
+// browser.cjs as a file instead - the same fallback Browsershot itself uses.
+const argvLimit = 96 * 1024;
+
+const app = express();
+app.use(express.json({ limit: bodyLimit }));
+
+app.get('/health', async (request, response) => {
+    response.json({
+        status: 'ok',
+        browserScript,
+        executablePath,
+        chromeArgs: defaultArgs,
+        browser: await browserVersion(),
+        // Puppeteer talks the protocol of the browser it pins. A browser that
+        // is several majors away from this is worth suspecting when pages fail
+        // in ways that make no sense.
+        puppeteer: versionOf('puppeteer'),
+        puppeteerExpectsBrowser: expectedBrowser(),
+        // A tight container memory limit makes Chrome die on heavy pages in
+        // ways that read as protocol errors.
+        memory: memory(),
+    });
+});
+
+app.post('/', (request, response) => {
+    if (authToken && request.get('authorization') !== `Bearer ${authToken}`) {
+        return response.status(401).json(failure(null, '', 'Invalid or missing authorization token.'));
+    }
+
+    const command = request.body;
+
+    if (!command || typeof command !== 'object' || typeof command.action !== 'string') {
+        return response.status(422).json(failure(null, '', 'Expected a Browsershot command object.'));
+    }
+
+    command.options = command.options || {};
+
+    if (executablePath && !command.options.executablePath) {
+        command.options.executablePath = executablePath;
+    }
+
+    if (defaultArgs.length) {
+        command.options.args = [...defaultArgs, ...(command.options.args || [])];
+    }
+
+    const started = Date.now();
+
+    runBrowserScript(command)
+        .then(result => {
+            log(command, started, result.exitCode, result.stderr);
+            response.status(result.exitCode === 0 ? 200 : 500).json(result);
+        })
+        .catch(error => {
+            log(command, started, null, error.message || String(error));
+            response.status(500).json(failure(null, '', error.message || String(error)));
+        });
+});
+
+app.listen(port, () => console.log(`Listening on port ${port}`));
+
+let browserVersionPromise = null;
+
+function browserVersion() {
+    if (!browserVersionPromise) {
+        browserVersionPromise = new Promise(resolve => {
+            if (!executablePath) {
+                return resolve(null);
+            }
+            execFile(executablePath, ['--version'], { timeout: 10000 }, (error, stdout) =>
+                resolve(error ? null : stdout.trim()));
+        });
+    }
+    return browserVersionPromise;
+}
+
+function readCgroup(file) {
+    const bases = ['/sys/fs/cgroup', '/sys/fs/cgroup/memory'];
+
+    // In a container with its own cgroup namespace the limit sits at the root.
+    // Outside one it sits under the process's own cgroup path.
+    try {
+        const own = fs.readFileSync('/proc/self/cgroup', 'utf8').match(/^0::(.*)$/m);
+        if (own && own[1] !== '/') {
+            bases.unshift(path.join('/sys/fs/cgroup', own[1]));
+        }
+    } catch {
+        // Not a cgroup v2 system; the defaults still apply.
+    }
+
+    for (const base of bases) {
+        try {
+            return fs.readFileSync(path.join(base, file), 'utf8').trim();
+        } catch {
+            // Try the next cgroup layout.
+        }
+    }
+    return null;
+}
+
+function memory() {
+    const limit = readCgroup('memory.max') ?? readCgroup('memory.limit_in_bytes');
+    const usage = readCgroup('memory.current') ?? readCgroup('memory.usage_in_bytes');
+    const mib = value => (value === null || value === 'max' || Number(value) > 2 ** 62 ? null : Math.round(Number(value) / 1048576));
+
+    return { limitMiB: mib(limit), usageMiB: mib(usage) };
+}
+
+function versionOf(name) {
+    try {
+        return require(`${name}/package.json`).version;
+    } catch {
+        return null;
+    }
+}
+
+function expectedBrowser() {
+    try {
+        return require('puppeteer-core/internal/revisions.js').PUPPETEER_REVISIONS.chrome;
+    } catch {
+        return null;
+    }
+}
+
+function log(command, started, exitCode, stderr) {
+    const outcome = exitCode === 0 ? 'ok' : `FAILED (exit ${exitCode})`;
+    const detail = exitCode === 0 ? '' : ` - ${(stderr || 'no error output').split('\n')[0].slice(0, 200)}`;
+
+    console.log(`${command.action} ${command.url} ${outcome} in ${Date.now() - started}ms${detail}`);
+}
+
+function failure(exitCode, stdout, stderr) {
+    return { exitCode, stdout, stderr };
+}
+
+function runBrowserScript(command) {
+    return new Promise((resolve, reject) => {
+        const id = crypto.randomUUID();
+        const payload = JSON.stringify(command);
+        const optionsFile = payload.length > argvLimit
+            ? path.join(os.tmpdir(), `browsershot-${id}.json`)
+            : null;
+
+        if (optionsFile) {
+            fs.writeFileSync(optionsFile, payload);
+        }
+
+        // browser.cjs reports a failure with console.log(json) immediately
+        // followed by process.exit(). Node does not flush a pipe before
+        // exiting, so anything past the pipe buffer is lost - which is exactly
+        // the diagnostics for the busy pages that tend to fail. Writes to a
+        // file descriptor are synchronous, so collect the output that way.
+        const stdoutFile = path.join(os.tmpdir(), `browsershot-${id}.out`);
+        const stderrFile = path.join(os.tmpdir(), `browsershot-${id}.err`);
+        const stdoutFd = fs.openSync(stdoutFile, 'w');
+        const stderrFd = fs.openSync(stderrFile, 'w');
+        const files = [optionsFile, stdoutFile, stderrFile];
+
+        const collect = () => {
+            for (const fd of [stdoutFd, stderrFd]) {
+                try {
+                    fs.closeSync(fd);
+                } catch {
+                    // Already closed.
+                }
+            }
+            const read = file => {
+                try {
+                    return fs.readFileSync(file, 'utf8');
+                } catch {
+                    return '';
+                }
+            };
+            return { stdout: read(stdoutFile), stderr: read(stderrFile) };
+        };
+
+        const child = spawn(process.execPath, [
+            browserScript,
+            optionsFile ? `-f file://${optionsFile}` : payload,
+        ], { stdio: ['ignore', stdoutFd, stderrFd] });
+
+        let timedOut = false;
+
+        const timer = setTimeout(() => {
+            timedOut = true;
+            child.kill('SIGKILL');
+        }, timeout);
+
+        child.on('error', error => {
+            clearTimeout(timer);
+            collect();
+            cleanup(files);
+            reject(error);
+        });
+
+        child.on('close', (exitCode, signal) => {
+            clearTimeout(timer);
+            const { stdout, stderr } = collect();
+            cleanup(files);
+
+            if (timedOut) {
+                return resolve(failure(exitCode, stdout, `Timed out after ${timeout / 1000}s.\n${stderr}`));
+            }
+
+            // A signal here means something killed the process rather than it
+            // failing on its own. SIGKILL is usually the OOM killer.
+            if (signal) {
+                return resolve(failure(exitCode, stdout, `Killed by ${signal}${signal === 'SIGKILL' ? ' (out of memory?)' : ''}.\n${stderr}`));
+            }
+
+            resolve({ exitCode, stdout: stdout.trimEnd(), stderr });
+        });
+    });
+}
+
+function cleanup(files) {
+    for (const file of files) {
+        if (file) {
+            fs.rm(file, { force: true }, () => {});
+        }
+    }
 }

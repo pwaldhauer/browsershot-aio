@@ -1,0 +1,8 @@
+.git
+.github
+node_modules
+src
+composer.json
+composer.lock
+vendor
+README.md
